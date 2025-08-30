@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="id" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ekstraktor Data KTP - NFC & OCR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
+    <style>
+        body { transition: background-color 0.3s, color 0.3s; }
+        .gradient-text {
+            background-image: linear-gradient(to right, #4f46e5, #ec4899);
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+        }
+        .dark .gradient-text { background-image: linear-gradient(to right, #818cf8, #f9a8d4); }
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #4f46e5;
+            border-radius: 50%; width: 40px; height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .cropper-view-box { outline: 2px solid #4f46e5; }
+        .template-overlay-box {
+            position: absolute;
+            border: 2px solid rgba(236, 72, 153, 0.7);
+            background-color: rgba(236, 72, 153, 0.2);
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: bold;
+            font-size: 10px;
+            text-shadow: 0 0 3px black;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 dark:bg-slate-900 text-slate-800 dark:text-slate-200 font-sans antialiased">
+
+    <!-- Modal Editor Gambar Utama -->
+    <div id="editor-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+        <div class="bg-white dark:bg-slate-800 rounded-lg shadow-xl w-full max-w-5xl h-[90vh] flex flex-col">
+            <h3 class="text-lg font-semibold p-4 border-b dark:border-slate-700">Posisikan KTP Agar Pas Dengan Template</h3>
+            <div class="p-4 flex-grow overflow-hidden relative">
+                <div id="cropper-container" class="w-full h-full"><img id="image-editor-source" class="hidden max-w-full max-h-full"></div>
+                <div id="template-overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none"></div>
+            </div>
+            <div class="p-4 border-t dark:border-slate-700 flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center space-x-2">
+                    <button id="zoom-in-btn" title="Perbesar" class="p-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path></svg></button>
+                    <button id="zoom-out-btn" title="Perkecil" class="p-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7"></path></svg></button>
+                    <span class="w-px h-6 bg-slate-300 dark:bg-slate-600"></span>
+                    <button id="rotate-fine-left-btn" title="Putar Kiri (0.5°)" class="p-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition"><svg class="w-5 h-5" style="transform: scaleX(-1);" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5m-5 2a9 9 0 0118 0 9 9 0 01-18 0z"></path></svg></button>
+                     <span class="text-sm font-medium text-slate-500">0.5°</span>
+                    <button id="rotate-fine-right-btn" title="Putar Kanan (0.5°)" class="p-2 bg-slate-200 dark:bg-slate-700 rounded-md hover:bg-slate-300 dark:hover:bg-slate-600 transition"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5m-5 2a9 9 0 0118 0 9 9 0 01-18 0z"></path></svg></button>
+                </div>
+                <button id="process-btn" class="px-4 py-2 bg-indigo-500 text-white rounded-md font-semibold text-sm hover:bg-indigo-600">Terapkan & Jalankan OCR</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mx-auto px-4 py-8 md:py-12 min-h-screen flex flex-col items-center">
+        <header class="w-full max-w-5xl text-center mb-8"><h1 class="text-4xl md:text-5xl font-bold gradient-text">Ekstraktor Data KTP</h1></header>
+
+        <main class="w-full max-w-5xl bg-white dark:bg-slate-800/50 border dark:border-slate-700 rounded-2xl shadow-lg p-6 md:p-8">
+            <div id="initial-view">
+                <div class="text-center">
+                    <button id="scan-nfc-btn" class="w-full max-w-md mx-auto flex items-center justify-center gap-3 px-6 py-4 bg-indigo-500 text-white rounded-lg font-semibold shadow-lg hover:bg-indigo-600 transition disabled:bg-slate-400 disabled:cursor-not-allowed">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                        Scan KTP dengan NFC
+                    </button>
+                    <p id="nfc-status" class="text-sm text-slate-500 mt-3 h-5"></p>
+                    <div class="my-6 text-center text-sm text-slate-400">Atau</div>
+                    <div id="upload-area">
+                        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp" class="hidden">
+                        <label for="file-input" class="cursor-pointer text-indigo-500 hover:underline font-semibold">Gunakan Kamera / Unggah File (Cadangan)</label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="processing-view" class="hidden text-center mt-4 text-slate-500 dark:text-slate-400">
+                <div class="loader mx-auto"></div>
+                <p id="status-text" class="mt-2">Memproses...</p>
+            </div>
+
+            <div id="result-area" class="hidden mt-6">
+                 <h3 class="font-semibold text-lg mb-4">Hasil Ekstraksi Data:</h3>
+                 <div class="grid md:grid-cols-3 gap-x-8 gap-y-4">
+                    <div class="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+                        <div class="space-y-3">
+                            <div class="grid grid-cols-3 gap-4 items-center"><strong>NIK</strong><input type="text" id="nik-result" class="result-input col-span-2 font-mono bg-slate-100 dark:bg-slate-700/50 rounded px-2 py-1"></div>
+                            <!-- ... other result fields ... -->
+                        </div>
+                    </div>
+                    <div class="mt-4 md:mt-0">
+                        <img id="foto-result" src="" alt="Pas Foto KTP" class="rounded-lg shadow-md w-full max-w-[150px] mx-auto">
+                    </div>
+                 </div>
+                 <div class="text-center mt-6">
+                    <button id="reset-btn" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 rounded-md font-semibold text-sm hover:bg-slate-300 dark:hover:bg-slate-600 transition">Proses File Lain</button>
+                </div>
+            </div>
+        </main>
+        
+        <canvas id="pdf-canvas" class="hidden"></canvas>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // --- Elemen DOM & State ---
+        const fileInput = document.getElementById('file-input');
+        const editorModal = document.getElementById('editor-modal');
+        const imageEditorSource = document.getElementById('image-editor-source');
+        const initialView = document.getElementById('initial-view');
+        const processingView = document.getElementById('processing-view');
+        const resultArea = document.getElementById('result-area');
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const statusText = document.getElementById('status-text');
+        const templateOverlay = document.getElementById('template-overlay');
+        const fotoResult = document.getElementById('foto-result');
+        const scanNfcBtn = document.getElementById('scan-nfc-btn');
+        const nfcStatus = document.getElementById('nfc-status');
+
+        let cropper, currentWorker;
+
+        // --- Template Tetap untuk Area OCR ---
+        const ocrTemplate = {
+            nik:       { label: 'NIK', x: 0.25, y: 0.19, width: 0.70, height: 0.08 },
+            nama:      { label: 'Nama', x: 0.25, y: 0.26, width: 0.70, height: 0.06 },
+            ttl:       { label: 'TTL', x: 0.25, y: 0.33, width: 0.70, height: 0.06 },
+            gender:    { label: 'Gender', x: 0.25, y: 0.40, width: 0.30, height: 0.06 },
+            goldarah:  { label: 'Gol.Darah', x: 0.60, y: 0.40, width: 0.20, height: 0.06 },
+            alamat:    { label: 'Alamat', x: 0.25, y: 0.47, width: 0.70, height: 0.06 },
+            rtrw:      { label: 'RT/RW', x: 0.30, y: 0.54, width: 0.65, height: 0.06 },
+            keldesa:   { label: 'Kel/Desa', x: 0.30, y: 0.61, width: 0.65, height: 0.06 },
+            kecamatan: { label: 'Kecamatan', x: 0.30, y: 0.68, width: 0.65, height: 0.06 },
+            agama:     { label: 'Agama', x: 0.25, y: 0.75, width: 0.70, height: 0.06 },
+            status:    { label: 'Status', x: 0.25, y: 0.82, width: 0.70, height: 0.06 },
+            pekerjaan: { label: 'Pekerjaan', x: 0.25, y: 0.89, width: 0.70, height: 0.06 },
+            foto:      { x: 0.76, y: 0.26, width: 0.20, height: 0.38 }
+        };
+        
+        // --- Inisialisasi Aplikasi ---
+        const init = () => {
+            fileInput.addEventListener('change', e => handleFileSelect(e.target.files[0]));
+            document.getElementById('process-btn').addEventListener('click', runOcrWithTemplate);
+            document.getElementById('reset-btn').addEventListener('click', resetAll);
+            document.getElementById('rotate-fine-left-btn').addEventListener('click', () => cropper && cropper.rotate(-0.5));
+            document.getElementById('rotate-fine-right-btn').addEventListener('click', () => cropper && cropper.rotate(0.5));
+            document.getElementById('zoom-in-btn').addEventListener('click', () => cropper && cropper.zoom(0.05));
+            document.getElementById('zoom-out-btn').addEventListener('click', () => cropper && cropper.zoom(-0.05));
+            
+            // Inisialisasi NFC
+            if ('NDEFReader' in window) {
+                scanNfcBtn.addEventListener('click', scanNFC);
+                nfcStatus.textContent = "NFC didukung di perangkat ini.";
+            } else {
+                scanNfcBtn.disabled = true;
+                nfcStatus.textContent = "NFC tidak didukung di browser/perangkat ini.";
+            }
+        };
+        
+        const switchView = (view) => {
+            [initialView, processingView, resultArea].forEach(v => v.classList.add('hidden'));
+            if(view) view.classList.remove('hidden');
+        };
+
+        const resetAll = () => {
+            fileInput.value = '';
+            if(cropper) cropper.destroy();
+            cropper = null;
+            if(currentWorker) {
+                currentWorker.terminate();
+                currentWorker = null;
+            }
+            document.querySelectorAll('.result-input').forEach(input => input.value = '');
+            fotoResult.src = "";
+            switchView(initialView);
+        };
+        
+        const scanNFC = async () => {
+            switchView(processingView);
+            statusText.textContent = "Tempelkan KTP di belakang ponsel Anda...";
+            try {
+                const reader = new NDEFReader();
+                await reader.scan();
+                
+                reader.addEventListener("readingerror", () => {
+                    statusText.textContent = "Gagal membaca KTP. Coba lagi.";
+                    setTimeout(() => switchView(initialView), 2000);
+                });
+
+                reader.addEventListener("reading", ({ message, serialNumber }) => {
+                    statusText.textContent = "✅ KTP Terdeteksi!";
+                    alert(`KTP dengan Serial Number ${serialNumber} terdeteksi. Namun, data pribadi di dalamnya terenkripsi dan tidak dapat dibaca oleh aplikasi web publik.`);
+                    switchView(initialView);
+                });
+            } catch (error) {
+                console.error("NFC Error:", error);
+                statusText.textContent = `Error NFC: ${error.message}`;
+                setTimeout(() => switchView(initialView), 3000);
+            }
+        };
+
+        const handleFileSelect = async (file) => {
+            if (!file) return;
+            switchView(processingView);
+            statusText.textContent = "Mempersiapkan file...";
+            try {
+                let imageUrl = file.type === 'application/pdf' ? await pdfToImageUrl(file) : URL.createObjectURL(file);
+                openEditor(imageUrl);
+            } catch (error) {
+                console.error("Gagal memproses file:", error); resetAll();
+            }
+        };
+
+        const pdfToImageUrl = async (pdfFile) => {
+            const data = await pdfFile.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data }).promise;
+            const page = await pdf.getPage(1);
+            const viewport = page.getViewport({ scale: 2.5 });
+            pdfCanvas.height = viewport.height;
+            pdfCanvas.width = viewport.width;
+            await page.render({ canvasContext: pdfCanvas.getContext('2d'), viewport }).promise;
+            return pdfCanvas.toDataURL('image/png');
+        };
+
+        const openEditor = (imageUrl) => {
+            imageEditorSource.src = imageUrl;
+            editorModal.classList.remove('hidden');
+            if (cropper) cropper.destroy();
+            cropper = new Cropper(imageEditorSource, { 
+                viewMode: 1, autoCropArea: 1, background: false,
+                dragMode: 'move', aspectRatio: 85.6 / 53.98,
+                ready: updateTemplateOverlay,
+                crop: updateTemplateOverlay,
+                zoom: updateTemplateOverlay
+            });
+        };
+
+        const updateTemplateOverlay = () => {
+            if (!cropper) return;
+            templateOverlay.innerHTML = '';
+            const cropBoxData = cropper.getCropBoxData();
+            
+            const left = cropBoxData.left;
+            const top = cropBoxData.top;
+            const width = cropBoxData.width;
+            const height = cropBoxData.height;
+
+            for (const key in ocrTemplate) {
+                const box = ocrTemplate[key];
+                const boxEl = document.createElement('div');
+                boxEl.className = 'template-overlay-box';
+                if (box.label) boxEl.textContent = box.label;
+                boxEl.style.left = `${left + (box.x * width)}px`;
+                boxEl.style.top = `${top + (box.y * height)}px`;
+                boxEl.style.width = `${box.width * width}px`;
+                boxEl.style.height = `${box.height * height}px`;
+                templateOverlay.appendChild(boxEl);
+            }
+        };
+
+        const runOcrWithTemplate = async () => {
+            editorModal.classList.add('hidden');
+            switchView(processingView);
+
+            if (!currentWorker) {
+                statusText.textContent = "Menginisialisasi mesin OCR (pertama kali)...";
+                currentWorker = await Tesseract.createWorker('ind');
+            }
+            
+            const canvas = cropper.getCroppedCanvas({ imageSmoothingQuality: 'high' });
+
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            const totalFields = Object.keys(ocrTemplate).length -1;
+            let processedFields = 0;
+
+            for (const key in ocrTemplate) {
+                if (key === 'foto') {
+                    const box = ocrTemplate.foto;
+                    const sx = box.x * canvas.width, sy = box.y * canvas.height;
+                    const sWidth = box.width * canvas.width, sHeight = box.height * canvas.height;
+                    tempCanvas.width = sWidth; tempCanvas.height = sHeight;
+                    tempCtx.drawImage(canvas, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+                    fotoResult.src = tempCanvas.toDataURL('image/png');
+                    continue;
+                }
+
+                processedFields++;
+                statusText.textContent = `Membaca field ${key}... (${processedFields}/${totalFields})`;
+                
+                const box = ocrTemplate[key];
+                const sx = box.x * canvas.width, sy = box.y * canvas.height;
+                const sWidth = box.width * canvas.width, sHeight = box.height * canvas.height;
+                
+                tempCanvas.width = sWidth; tempCanvas.height = sHeight;
+                tempCtx.drawImage(canvas, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+                
+                try {
+                    const { data: { text } } = await currentWorker.recognize(tempCanvas);
+                    let cleanedText = text.trim().replace(/\s+/g, ' ');
+                    if (key === 'nik') cleanedText = cleanedText.replace(/\D/g, '');
+                    document.getElementById(`${key}-result`).value = cleanedText;
+                } catch (e) {
+                    console.error(`Gagal membaca field ${key}`, e);
+                    document.getElementById(`${key}-result`).value = "Gagal dibaca";
+                }
+            }
+            switchView(resultArea);
+        };
+        
+        init();
+    </script>
+</body>
+</html>
+
